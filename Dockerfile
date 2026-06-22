@@ -3,17 +3,20 @@ FROM tomcat:10.1-jdk21 AS compiler
 
 WORKDIR /build
 
+# Download PostgreSQL JDBC driver
+RUN apt-get update && apt-get install -y wget && \
+    wget -q https://jdbc.postgresql.org/download/postgresql-42.7.3.jar -O /postgresql.jar
+
 # Copy Java source files
 COPY src/main/java/ /build/src/
 
-# Copy any extra JARs (e.g. mysql-connector)
+# Copy webapp lib directory
 COPY src/main/webapp/WEB-INF/lib/ /build/lib/
 
-# Find all .java files and compile them
-# We use Tomcat's own servlet-api JARs so imports resolve correctly
+# Compile all Java files using Tomcat servlet API + PostgreSQL driver
 RUN find /build/src -name "*.java" > /build/sources.txt && \
     mkdir -p /build/classes && \
-    javac -cp "/build/lib/*:/usr/local/tomcat/lib/*" \
+    javac -cp "/build/lib/*:/usr/local/tomcat/lib/*:/postgresql.jar" \
           -d /build/classes \
           @/build/sources.txt
 
@@ -22,18 +25,27 @@ FROM tomcat:10.1-jdk21
 
 # Remove default Tomcat webapps
 RUN rm -rf /usr/local/tomcat/webapps/*
-
-# Create ROOT webapp directory
 RUN mkdir -p /usr/local/tomcat/webapps/ROOT
 
-# Copy the webapp (JSPs, WEB-INF, lib)
+# Copy webapp (JSPs, WEB-INF, lib)
 COPY src/main/webapp/ /usr/local/tomcat/webapps/ROOT/
+
+# Remove MySQL connector and add PostgreSQL driver instead
+RUN rm -f /usr/local/tomcat/webapps/ROOT/WEB-INF/lib/mysql-connector-j-9.7.0.jar
+RUN apt-get update && apt-get install -y wget && \
+    wget -q https://jdbc.postgresql.org/download/postgresql-42.7.3.jar \
+         -O /usr/local/tomcat/webapps/ROOT/WEB-INF/lib/postgresql-42.7.3.jar
 
 # Copy freshly compiled classes from Stage 1
 COPY --from=compiler /build/classes/ /usr/local/tomcat/webapps/ROOT/WEB-INF/classes/
 
-# Expose Tomcat default port
+# Copy schema init script
+COPY init_schema.sql /init_schema.sql
+
+# Copy and set entrypoint
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 EXPOSE 8080
 
-# Start Tomcat
-CMD ["catalina.sh", "run"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
